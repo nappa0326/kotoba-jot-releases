@@ -26,26 +26,27 @@ jobs:
           NOTES: ${{ github.event.client_payload.release_notes }}
           RELEASE_URL: ${{ github.event.client_payload.release_url }}
         run: |
+          # jq でリクエスト body をファイルに書き出し（shell 展開を経由しない）
+          jq -n \
+            --arg notes "$NOTES" \
+            --arg version "$VERSION" \
+            --arg url "$RELEASE_URL" \
+            '{
+              model: "claude-haiku-4-5-20251001",
+              max_tokens: 300,
+              messages: [{
+                role: "user",
+                content: ("以下のリリースノートから、Xに投稿するツイート文を1つだけ生成してください。\n\n制約:\n- 日本語で書く\n- X の文字数制限: 全角文字（日本語・絵文字）は2カウント、半角は1カウント、合計280以内\n- 実質的に日本語約120文字以内（URL・ハッシュタグ含む）\n- 絵文字は控えめに（1-2個まで）\n- 末尾にリリースURLを含める: " + $url + "\n- ハッシュタグ: #KotobaJot\n- ツイート文のみ出力（説明や前置き不要）\n\nバージョン: v" + $version + "\nリリースノート:\n" + $notes)
+              }]
+            }' > /tmp/anthropic_request.json
+
           # Anthropic API でツイート文を生成（HTTP ステータスを個別チェック）
           HTTP_CODE=$(curl -s -o /tmp/anthropic_response.json -w '%{http_code}' \
             https://api.anthropic.com/v1/messages \
             -H "Content-Type: application/json" \
             -H "x-api-key: ${ANTHROPIC_API_KEY}" \
             -H "anthropic-version: 2023-06-01" \
-            -d "$(jq -n \
-              --arg notes "$NOTES" \
-              --arg version "$VERSION" \
-              --arg url "$RELEASE_URL" \
-              '{
-                model: "claude-haiku-4-5-20251001",
-                max_tokens: 300,
-                messages: [{
-                  role: "user",
-                  content: ("以下のリリースノートから、Xに投稿するツイート文を1つだけ生成してください。\n\n制約:\n- 日本語で書く\n- X の文字数制限: 全角文字（日本語・絵文字）は2カウント、半角は1カウント、合計280以内\n- 実質的に日本語約120文字以内（URL・ハッシュタグ含む）\n- 絵文字は控えめに（1-2個まで）\n- 末尾にリリースURLを含める: " + $url + "\n- ハッシュタグ: #KotobaJot\n- ツイート文のみ出力（説明や前置き不要）\n\nバージョン: v" + $version + "\nリリースノート:\n" + $notes)
-                }]
-              }'
-            )"
-          )
+            -d @/tmp/anthropic_request.json)
 
           if [ "$HTTP_CODE" != "200" ]; then
             echo "ERROR: Anthropic API returned HTTP $HTTP_CODE"
