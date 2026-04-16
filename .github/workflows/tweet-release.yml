@@ -48,10 +48,15 @@ jobs:
             -H "anthropic-version: 2023-06-01" \
             --data-binary @/tmp/anthropic_request.json)
 
-          # デバッグ: リクエストサイズとレスポンス先頭を表示（失敗時調査用）
+          # デバッグ: リクエストサイズと最初のバイト列を表示（失敗時調査用）
           if [ "$HTTP_CODE" != "200" ]; then
             echo "Request size: $(wc -c < /tmp/anthropic_request.json) bytes"
-            echo "Request head: $(head -c 200 /tmp/anthropic_request.json)"
+            echo "First 30 bytes (hex):"
+            od -c -N 30 /tmp/anthropic_request.json
+            echo "JSON validation:"
+            jq empty /tmp/anthropic_request.json 2>&1 || echo "INVALID JSON"
+            echo "Response body:"
+            cat /tmp/anthropic_response.json
           fi
 
           if [ "$HTTP_CODE" != "200" ]; then
