@@ -26,6 +26,19 @@ jobs:
           NOTES: ${{ github.event.client_payload.release_notes }}
           RELEASE_URL: ${{ github.event.client_payload.release_url }}
         run: |
+          # まず最小リクエストで API 疎通確認
+          echo "=== Minimal test request ==="
+          MIN_CODE=$(curl -s -o /tmp/min_response.json -w '%{http_code}' \
+            https://api.anthropic.com/v1/messages \
+            -H "Content-Type: application/json" \
+            -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+            -H "anthropic-version: 2023-06-01" \
+            -d '{"model":"claude-haiku-4-5-20251001","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}')
+          echo "Minimal test HTTP: $MIN_CODE"
+          echo "Minimal response:"
+          cat /tmp/min_response.json
+          echo ""
+
           # jq でリクエスト body をファイルに書き出し（shell 展開を経由しない）
           jq -n \
             --arg notes "$NOTES" \
