@@ -1,0 +1,147 @@
+name: Tweet on Release
+
+on:
+  repository_dispatch:
+    types: [new-release]
+
+# 同一バージョンの dispatch が重複発火した場合、2回目をキャンセルして二重ツイート防止
+concurrency:
+  group: tweet-release-${{ github.event.client_payload.version }}
+  cancel-in-progress: true
+
+jobs:
+  tweet:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Generate tweet with Anthropic API
+        id: generate
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          VERSION: ${{ github.event.client_payload.version }}
+          NOTES: ${{ github.event.client_payload.release_notes }}
+          RELEASE_URL: ${{ github.event.client_payload.release_url }}
+        run: |
+          # Anthropic API でツイート文を生成（HTTP ステータスを個別チェック）
+          HTTP_CODE=$(curl -s -o /tmp/anthropic_response.json -w '%{http_code}' \
+            https://api.anthropic.com/v1/messages \
+            -H "Content-Type: application/json" \
+            -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+            -H "anthropic-version: 2023-06-01" \
+            -d "$(jq -n \
+              --arg notes "$NOTES" \
+              --arg version "$VERSION" \
+              --arg url "$RELEASE_URL" \
+              '{
+                model: "claude-haiku-4-5-20251001",
+                max_tokens: 300,
+                messages: [{
+                  role: "user",
+                  content: ("以下のリリースノートから、Xに投稿するツイート文を1つだけ生成してください。\n\n制約:\n- 日本語で書く\n- X の文字数制限: 全角文字（日本語・絵文字）は2カウント、半角は1カウント、合計280以内\n- 実質的に日本語約120文字以内（URL・ハッシュタグ含む）\n- 絵文字は控えめに（1-2個まで）\n- 末尾にリリースURLを含める: " + $url + "\n- ハッシュタグ: #KotobaJot\n- ツイート文のみ出力（説明や前置き不要）\n\nバージョン: v" + $version + "\nリリースノート:\n" + $notes)
+                }]
+              }'
+            )"
+          )
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "ERROR: Anthropic API returned HTTP $HTTP_CODE"
+            # エラー部分のみ出力（レスポンス全体はログに残さない）
+            jq -r '.error // .type // "unknown error"' /tmp/anthropic_response.json 2>/dev/null || echo "Could not parse error response"
+            exit 1
+          fi
+
+          RESPONSE=$(cat /tmp/anthropic_response.json)
+
+          # レスポンスからツイート文を抽出
+          TWEET=$(echo "$RESPONSE" | jq -r '.content[0].text')
+
+          if [ -z "$TWEET" ] || [ "$TWEET" = "null" ]; then
+            echo "ERROR: Failed to extract tweet from response"
+            echo "stop_reason: $(echo "$RESPONSE" | jq -r '.stop_reason // "N/A"')"
+            exit 1
+          fi
+
+          echo "Generated tweet: $TWEET"
+
+          # multiline output
+          DELIM="EOF_$(openssl rand -hex 8)"
+          echo "tweet<<$DELIM" >> $GITHUB_OUTPUT
+          echo "$TWEET" >> $GITHUB_OUTPUT
+          echo "$DELIM" >> $GITHUB_OUTPUT
+
+      - name: Validate tweet length
+        id: validate
+        env:
+          TWEET: ${{ steps.generate.outputs.tweet }}
+          VERSION: ${{ github.event.client_payload.version }}
+          RELEASE_URL: ${{ github.event.client_payload.release_url }}
+        run: |
+          # twitter-text で正確な weighted length を検証
+          npm init -y > /dev/null 2>&1
+          npm install twitter-text@3.1.0 > /dev/null 2>&1
+
+          RESULT=$(node -e "
+            const twitter = require('twitter-text');
+            const tweet = process.env.TWEET;
+            const parsed = twitter.parseTweet(tweet);
+            console.log(JSON.stringify({
+              weightedLength: parsed.weightedLength,
+              valid: parsed.valid,
+              displayRangeEnd: parsed.displayRangeEnd
+            }));
+          ")
+
+          echo "Validation result: $RESULT"
+          VALID=$(echo "$RESULT" | jq -r '.valid')
+          LENGTH=$(echo "$RESULT" | jq -r '.weightedLength')
+
+          if [ "$VALID" != "true" ]; then
+            echo "WARNING: Tweet exceeds 280 weighted chars ($LENGTH). Using fallback."
+            FALLBACK="Kotoba-Jot v${VERSION} をリリースしました。 ${RELEASE_URL} #KotobaJot"
+            DELIM="EOF_$(openssl rand -hex 8)"
+            echo "tweet<<$DELIM" >> $GITHUB_OUTPUT
+            echo "$FALLBACK" >> $GITHUB_OUTPUT
+            echo "$DELIM" >> $GITHUB_OUTPUT
+          else
+            echo "Tweet is valid ($LENGTH/280 weighted chars)"
+            DELIM="EOF_$(openssl rand -hex 8)"
+            echo "tweet<<$DELIM" >> $GITHUB_OUTPUT
+            echo "$TWEET" >> $GITHUB_OUTPUT
+            echo "$DELIM" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Post to X
+        env:
+          TWEET_TEXT: ${{ steps.validate.outputs.tweet }}
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+        run: |
+          npm install twitter-api-v2@1.17.2 > /dev/null 2>&1
+
+          node -e "
+            const { TwitterApi } = require('twitter-api-v2');
+            const client = new TwitterApi({
+              appKey: process.env.X_API_KEY,
+              appSecret: process.env.X_API_SECRET,
+              accessToken: process.env.X_ACCESS_TOKEN,
+              accessSecret: process.env.X_ACCESS_TOKEN_SECRET,
+            });
+            (async () => {
+              try {
+                const tweet = process.env.TWEET_TEXT;
+                const result = await client.v2.tweet(tweet);
+                console.log('Tweet posted successfully:', result.data.id);
+                console.log('URL: https://x.com/i/status/' + result.data.id);
+              } catch (err) {
+                console.error('Failed to post tweet:', err.message);
+                if (err.data) console.error('API response:', JSON.stringify(err.data));
+                process.exit(1);
+              }
+            })();
+          "
