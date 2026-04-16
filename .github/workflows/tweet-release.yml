@@ -26,6 +26,11 @@ jobs:
           NOTES: ${{ github.event.client_payload.release_notes }}
           RELEASE_URL: ${{ github.event.client_payload.release_url }}
         run: |
+          # API キーの長さ検証（値自体は出力しない）
+          echo "API key length: ${#ANTHROPIC_API_KEY}"
+          echo "API key first 7 chars: ${ANTHROPIC_API_KEY:0:7}***"
+          echo "API key last 4 chars: ***${ANTHROPIC_API_KEY: -4}"
+
           # まず最小リクエストで API 疎通確認
           echo "=== Minimal test request ==="
           MIN_CODE=$(curl -s -o /tmp/min_response.json -w '%{http_code}' \
