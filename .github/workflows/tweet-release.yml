@@ -46,7 +46,13 @@ jobs:
             -H "Content-Type: application/json" \
             -H "x-api-key: ${ANTHROPIC_API_KEY}" \
             -H "anthropic-version: 2023-06-01" \
-            -d @/tmp/anthropic_request.json)
+            --data-binary @/tmp/anthropic_request.json)
+
+          # デバッグ: リクエストサイズとレスポンス先頭を表示（失敗時調査用）
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Request size: $(wc -c < /tmp/anthropic_request.json) bytes"
+            echo "Request head: $(head -c 200 /tmp/anthropic_request.json)"
+          fi
 
           if [ "$HTTP_CODE" != "200" ]; then
             echo "ERROR: Anthropic API returned HTTP $HTTP_CODE"
