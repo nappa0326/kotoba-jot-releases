@@ -26,17 +26,17 @@ jobs:
           NOTES: ${{ github.event.client_payload.release_notes }}
           RELEASE_URL: ${{ github.event.client_payload.release_url }}
         run: |
-          # API キーの長さ検証（値自体は出力しない）
-          echo "API key length: ${#ANTHROPIC_API_KEY}"
-          echo "API key first 7 chars: ${ANTHROPIC_API_KEY:0:7}***"
-          echo "API key last 4 chars: ***${ANTHROPIC_API_KEY: -4}"
+          # API キーの空白・改行を除去（GitHub Secrets 登録時のトレーリング対策）
+          CLEAN_KEY=$(printf '%s' "$ANTHROPIC_API_KEY" | tr -d '[:space:]')
+          echo "Original key length: ${#ANTHROPIC_API_KEY}"
+          echo "Cleaned key length: ${#CLEAN_KEY}"
 
           # まず最小リクエストで API 疎通確認
           echo "=== Minimal test request ==="
           MIN_CODE=$(curl -s -o /tmp/min_response.json -w '%{http_code}' \
             https://api.anthropic.com/v1/messages \
             -H "Content-Type: application/json" \
-            -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+            -H "x-api-key: ${CLEAN_KEY}" \
             -H "anthropic-version: 2023-06-01" \
             -d '{"model":"claude-haiku-4-5-20251001","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}')
           echo "Minimal test HTTP: $MIN_CODE"
@@ -62,7 +62,7 @@ jobs:
           HTTP_CODE=$(curl -s -o /tmp/anthropic_response.json -w '%{http_code}' \
             https://api.anthropic.com/v1/messages \
             -H "Content-Type: application/json" \
-            -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+            -H "x-api-key: ${CLEAN_KEY}" \
             -H "anthropic-version: 2023-06-01" \
             --data-binary @/tmp/anthropic_request.json)
 
